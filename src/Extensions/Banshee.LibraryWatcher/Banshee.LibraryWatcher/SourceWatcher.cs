@@ -52,7 +52,7 @@ namespace Banshee.LibraryWatcher
     {
         private readonly LibraryImportManager import_manager;
         private readonly LibrarySource library;
-        private readonly FileSystemWatcher watcher;
+        private readonly List<FileSystemWatcher> watcher = new List<FileSystemWatcher> ();
         private readonly ManualResetEvent handle;
         private readonly Thread watch_thread;
 
@@ -83,12 +83,24 @@ namespace Banshee.LibraryWatcher
 
             import_manager = ServiceManager.Get<LibraryImportManager> ();
 
-            watcher = new FileSystemWatcher (path);
-            watcher.IncludeSubdirectories = true;
-            watcher.Changed += OnChanged;
-            watcher.Created += OnChanged;
-            watcher.Deleted += OnChanged;
-            watcher.Renamed += OnChanged;
+            FileSystemWatcher master_watcher = new FileSystemWatcher (path);
+            master_watcher.IncludeSubdirectories = true;
+            master_watcher.Changed += OnChanged;
+            master_watcher.Created += OnChanged;
+            master_watcher.Deleted += OnChanged;
+            master_watcher.Renamed += OnChanged;
+            watcher.Add (master_watcher);
+
+            foreach (string additional_path in ServiceManager.SourceManager.ActiveSource.Properties.Get<string[]> ("AdditionalWatchedDirectories")) {
+                Hyena.Log.DebugFormat ("Watcher: additional LibraryWatcher for {0}", additional_path);
+                FileSystemWatcher additional_watcher = new FileSystemWatcher (additional_path);
+                additional_watcher.IncludeSubdirectories = true;
+                additional_watcher.Changed += OnChanged;
+                additional_watcher.Created += OnChanged;
+                additional_watcher.Deleted += OnChanged;
+                additional_watcher.Renamed += OnChanged;
+                watcher.Add (additional_watcher);
+            }
 
             active = true;
             watch_thread = new Thread (new ThreadStart (Watch));
@@ -103,16 +115,19 @@ namespace Banshee.LibraryWatcher
         {
             if (!disposed) {
                 active = false;
-                watcher.Changed -= OnChanged;
-                watcher.Created -= OnChanged;
-                watcher.Deleted -= OnChanged;
-                watcher.Renamed -= OnChanged;
+                foreach (FileSystemWatcher current_watcher in watcher) {
+                    current_watcher.Changed -= OnChanged;
+                    current_watcher.Created -= OnChanged;
+                    current_watcher.Deleted -= OnChanged;
+                    current_watcher.Renamed -= OnChanged;
+                }
 
                 lock (queue) {
                     queue.Clear ();
                 }
 
-                watcher.Dispose ();
+                foreach (FileSystemWatcher current_watcher in watcher)
+                    current_watcher.Dispose ();
                 disposed = true;
             }
         }
@@ -143,7 +158,8 @@ namespace Banshee.LibraryWatcher
 
         private void Watch ()
         {
-            watcher.EnableRaisingEvents = true;
+            foreach (FileSystemWatcher current_watcher in watcher)
+                current_watcher.EnableRaisingEvents = true;
 
             while (active) {
                 WatcherChangeTypes change_types = 0;
